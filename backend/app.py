@@ -4,9 +4,12 @@ from flask import Flask, render_template, request, redirect, url_for, send_file,
 import sqlite3
 import os
 from werkzeug.utils import secure_filename
-from extract import extract_text_from_file
-from ats import calculate_ats_score
-from generate_resume import create_pdf_from_dict, create_txt_from_dict
+
+# IMPORTANT: FIX IMPORTS FOR RENDER
+from backend.extract import extract_text_from_file
+from backend.ats import calculate_ats_score
+from backend.generate_resume import create_pdf_from_dict, create_txt_from_dict
+
 from datetime import datetime
 
 # ============================
@@ -88,19 +91,15 @@ def upload():
         flash("File type not allowed. Use pdf, docx, or txt.", "error")
         return redirect(url_for("index"))
 
-    # Save file safely
     filename = secure_filename(file.filename)
     timestamped_filename = f"{datetime.now().timestamp()}_{filename}"
     saved_path = os.path.join(app.config["UPLOAD_FOLDER"], timestamped_filename)
     file.save(saved_path)
 
-    # Extract resume text
     resume_text = extract_text_from_file(saved_path)
 
-    # ATS calculation
     ats_score, missing, details = calculate_ats_score(resume_text, jd)
 
-    # Store in SQLite
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
@@ -145,8 +144,7 @@ def download_txt():
 
 
 # ============================
-# RUN (LOCAL ONLY)
-# Render uses Gunicorn
+# LOCAL RUN
 # ============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

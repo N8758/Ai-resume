@@ -1,23 +1,39 @@
 # backend/app.py
+
 from flask import Flask, render_template, request, redirect, url_for, send_file, flash
 import sqlite3
 import os
-import tempfile
 from werkzeug.utils import secure_filename
 from extract import extract_text_from_file
 from ats import calculate_ats_score
 from generate_resume import create_pdf_from_dict, create_txt_from_dict
 from datetime import datetime
 
-UPLOAD_FOLDER = "uploads"
+# ============================
+# FIX 1: RENDER-SAFE UPLOAD DIR
+# ============================
+UPLOAD_FOLDER = "/tmp/uploads"
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-app = Flask(__name__, template_folder="../templates", static_folder="../static")
+# ============================
+# FIX 2: TEMPLATE/STATIC PATHS
+# ============================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, "../templates"),
+    static_folder=os.path.join(BASE_DIR, "../static")
+)
+
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.secret_key = "dev-key-for-local"
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-DB_PATH = os.path.join(os.path.dirname(__file__), "database.db")
+# ============================
+# DATABASE SETUP
+# ============================
+DB_PATH = os.path.join(BASE_DIR, "database.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -38,12 +54,22 @@ def init_db():
 
 init_db()
 
+
+# ============================
+# HELPERS
+# ============================
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+# ============================
+# ROUTES
+# ============================
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -62,14 +88,19 @@ def upload():
         flash("File type not allowed. Use pdf, docx, or txt.", "error")
         return redirect(url_for("index"))
 
+    # Save file safely
     filename = secure_filename(file.filename)
-    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{datetime.now().timestamp()}_{filename}")
+    timestamped_filename = f"{datetime.now().timestamp()}_{filename}"
+    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], timestamped_filename)
     file.save(saved_path)
 
+    # Extract resume text
     resume_text = extract_text_from_file(saved_path)
+
+    # ATS calculation
     ats_score, missing, details = calculate_ats_score(resume_text, jd)
 
-    # store in sqlite
+    # Store in SQLite
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
@@ -79,32 +110,32 @@ def upload():
     conn.commit()
     conn.close()
 
-    return render_template("result.html",
-                           resume_text=resume_text,
-                           job_description=jd,
-                           score=ats_score,
-                           missing=missing,
-                           details=details)
+    return render_template(
+        "result.html",
+        resume_text=resume_text,
+        job_description=jd,
+        score=ats_score,
+        missing=missing,
+        details=details
+    )
+
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    # Form fields for resume generation
     data = {
-        "name": request.form.get("name",""),
-        "email": request.form.get("email",""),
-        "phone": request.form.get("phone",""),
-        "summary": request.form.get("summary",""),
-        "experience": request.form.get("experience",""),
-        "education": request.form.get("education",""),
-        "skills": request.form.get("skills",""),
-        "projects": request.form.get("projects","")
+        "name": request.form.get("name", ""),
+        "email": request.form.get("email", ""),
+        "phone": request.form.get("phone", ""),
+        "summary": request.form.get("summary", ""),
+        "experience": request.form.get("experience", ""),
+        "education": request.form.get("education", ""),
+        "skills": request.form.get("skills", ""),
+        "projects": request.form.get("projects", ""),
     }
 
     out_pdf = create_pdf_from_dict(data)
-    out_txt = create_txt_from_dict(data)
-
-    # send PDF by default; allow user to download txt via link on result page
     return send_file(out_pdf, as_attachment=True, download_name="generated_resume.pdf")
+
 
 @app.route("/download_txt", methods=["POST"])
 def download_txt():
@@ -112,5 +143,10 @@ def download_txt():
     out_txt = create_txt_from_dict(data)
     return send_file(out_txt, as_attachment=True, download_name="generated_resume.txt")
 
+
+# ============================
+# RUN (LOCAL ONLY)
+# Render uses Gunicorn
+# ============================
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)
